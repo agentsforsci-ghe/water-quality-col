@@ -1,0 +1,150 @@
+---
+title: "What is the observational unit of Colombia's drinking-water quality data?"
+subtitle: "A structural description of the *Calidad del Agua para Consumo Humano en Colombia* dataset"
+author:
+  - name: Adriana Clavijo Daza
+    affiliations:
+      - name: ETH Zurich
+date: last-modified
+abstract: |
+  This note answers the first question posed for the Colombian drinking-water quality dataset held in this repository: what is the observational unit of the water quality measurements? Inspecting the structure of the file shows that it contains two kinds of rows. The bulk of the file consists of one row per municipality per calendar year, carrying the annual Water Quality Risk Index (IRCA) and its associated risk category for the municipality as a whole and separately for its urban and rural areas. A smaller set of rows, flagged with the code `#TODOS`, holds the same quantities aggregated to the department level. The observational unit of the measurements is therefore the municipality-year, and the department-year rows are derived summaries that should be separated from the municipal rows before any analysis.
+keywords: [water quality, IRCA, Colombia, observational unit, data structure]
+---
+
+```{r setup}
+library(dplyr)
+library(readr)
+library(tidyr)
+library(knitr)
+library(ggplot2)
+
+raw <- read_csv(
+  "../data/Calidad_del_Agua_para_Consumo_Humano_en_Colombia_20260915.csv",
+  col_types = cols(.default = col_character())
+)
+
+d <- raw |>
+  mutate(
+    year = as.integer(gsub(",", "", Año)),
+    level = if_else(MunicipioCodigo == "#TODOS", "Department", "Municipality")
+  )
+
+muni <- filter(d, level == "Municipality")
+dept <- filter(d, level == "Department")
+
+n_rows <- nrow(d)
+n_cols <- ncol(raw)
+n_muni_rows <- nrow(muni)
+n_dept_rows <- nrow(dept)
+n_muni_codes <- n_distinct(muni$MunicipioCodigo)
+n_dept_codes <- n_distinct(d$DepartamentoCodigo)
+year_min <- min(d$year)
+year_max <- max(d$year)
+n_years <- n_distinct(d$year)
+
+n_dup <- sum(duplicated(d[, c("DepartamentoCodigo", "MunicipioCodigo", "year")]))
+n_dup_muni <- sum(duplicated(muni[, c("MunicipioCodigo", "year")]))
+n_prefix_mismatch <- sum(substr(muni$MunicipioCodigo, 1, 2) != muni$DepartamentoCodigo)
+
+muni_per_year <- muni |> count(year, name = "n_municipalities")
+years_per_muni <- muni |> count(MunicipioCodigo, name = "n_years")
+n_full_panel <- sum(years_per_muni$n_years == n_years)
+```
+
+# Introduction
+
+The repository contains a single data file, `Calidad_del_Agua_para_Consumo_Humano_en_Colombia_20260915.csv`, that reports the quality of water supplied for human consumption in Colombia. The name of the file and its variables correspond to the national drinking-water surveillance programme, in which water samples collected by territorial health authorities are consolidated into the *Índice de Riesgo de la Calidad del Agua para Consumo Humano* (IRCA), the Water Quality Risk Index. The IRCA is a score from 0 to 100 that summarises how far a set of samples deviates from the physical, chemical and microbiological standards of Colombian Resolution 2115 of 2007, and it is mapped onto a small number of risk categories ranging from "no risk" to "sanitarily unviable".
+
+Before any substantive analysis of this dataset can be planned, one must know what a single row of the file represents. The first question listed in `questions.md` asks exactly this: *what is the observational unit of the water quality measurements?* This note answers that question from the structure of the data alone, without reference to external documentation, and records the features of the file that an analyst must handle when working with it.
+
+# Data and methods
+
+The file was read as a plain-text, comma-separated table with all columns imported as character strings, so that no information was lost or silently coerced during import. The analysis then proceeded in three steps. First, the columns were described and the distinct values of the identifier columns were enumerated. Second, candidate identifying keys were tested for uniqueness, that is, whether a combination of columns identifies each row exactly once. Third, the resulting units were counted across space and time to characterise the shape of the panel.
+
+All computations were performed in R and are embedded in the source of this document, so that every number reported below is reproduced from the data file when the document is rendered.
+
+# Results
+
+## Structure of the file
+
+The file contains `r format(n_rows, big.mark = ",")` rows and `r n_cols` columns. @tbl-vars lists the columns and their interpretation. Four columns identify a place (a department code and name, and a municipality code and name), one column identifies a calendar year, and the remaining six columns are the measurements: a numeric IRCA value and its categorical risk level, each reported three times, for the whole territorial unit, for its urban area and for its rural area.
+
+```{r}
+#| label: tbl-vars
+#| tbl-cap: "Columns of the data file and their interpretation."
+tibble::tribble(
+  ~Column, ~Role, ~Content,
+  "DepartamentoCodigo", "Identifier", "Two-digit DANE code of the department (33 distinct values, including Bogotá D.C. as code 11)",
+  "Departamento", "Identifier", "Name of the department",
+  "MunicipioCodigo", "Identifier", "Five-digit DANE code of the municipality; the first two digits are the department code. The value #TODOS marks a department-level aggregate",
+  "Municipio", "Identifier", "Name of the municipality; #TODOS for department-level aggregates",
+  "Año", "Identifier", "Calendar year of the measurement, stored as text with a thousands separator (e.g. 2,024)",
+  "IRCA", "Measurement", "Annual Water Quality Risk Index (0 to 100) for the whole unit",
+  "Nivel de riesgo", "Measurement", "Risk category derived from IRCA",
+  "IRCAurbano", "Measurement", "Annual IRCA for the urban area of the unit; ND when not available",
+  "Nivel de riesgo urbano", "Measurement", "Risk category derived from IRCAurbano",
+  "IRCArural", "Measurement", "Annual IRCA for the rural area of the unit; ND when not available",
+  "Nivel de riesgo rural", "Measurement", "Risk category derived from IRCArural"
+) |>
+  kable()
+```
+
+## Two kinds of rows
+
+The municipality columns take the special value `#TODOS` ("all") in `r format(n_dept_rows, big.mark = ",")` rows. In these rows the department is named but the municipality is not, and the IRCA values correspond to the department as a whole. The remaining `r format(n_muni_rows, big.mark = ",")` rows carry a genuine five-digit municipality code. The file therefore stacks two levels of aggregation in one table: municipal rows and departmental rows. @tbl-levels shows how the two kinds of rows are distributed over the years covered by the file.
+
+```{r}
+#| label: tbl-levels
+#| tbl-cap: "Number of rows per year, by level of aggregation."
+d |>
+  count(year, level) |>
+  pivot_wider(names_from = level, values_from = n, values_fill = 0) |>
+  mutate(Total = Municipality + Department) |>
+  rename(Year = year) |>
+  kable()
+```
+
+## The identifying key
+
+A row is uniquely identified by the combination of department code, municipality code and year: no two rows in the file share the same values of these three columns (`r n_dup` duplicates). Within the municipal rows, the pair of municipality code and year is already sufficient (`r n_dup_muni` duplicates), because the municipality code embeds the department code as its first two digits; this holds for every one of the `r format(n_muni_rows, big.mark = ",")` municipal rows (`r n_prefix_mismatch` mismatches). Within the departmental rows, the pair of department code and year is the key.
+
+The data thus have a clear panel structure. The observational unit of the water quality measurements is the **municipality-year**: each row records, for one municipality and one calendar year, the annual IRCA score and risk category for the municipality as a whole and separately for its urban and rural population. The department-year rows are aggregates derived from the same surveillance data and constitute a second, coarser set of units that should be analysed separately, or discarded, rather than mixed with the municipal rows.
+
+It is worth stressing what the observational unit is *not*. The IRCA is computed by the surveillance system from many individual water samples taken over the year, but those samples are not present in the file. A row does not represent a sample, a water supply system, a sampling site or a month; it represents the annual consolidation of all samples in a municipality. Any analysis is therefore limited to the resolution of one value per municipality per year, and the numbers of samples behind each value are unknown.
+
+## Extent of the panel
+
+The municipal rows cover `r format(n_muni_codes, big.mark = ",")` distinct municipality codes across `r n_dept_codes` departments and `r n_years` calendar years, from `r year_min` to `r year_max`. The panel is not perfectly balanced: the number of municipalities reported in a given year ranges from `r min(muni_per_year$n_municipalities)` to `r max(muni_per_year$n_municipalities)` (@fig-muni-year), and `r format(n_full_panel, big.mark = ",")` municipalities appear in all `r n_years` years. The question of completeness is the subject of the second question in `questions.md` and is not pursued further here.
+
+```{r}
+#| label: fig-muni-year
+#| fig-cap: "Number of municipalities with a water quality record in each year. Department-level aggregate rows are excluded."
+ggplot(muni_per_year, aes(x = year, y = n_municipalities)) +
+  geom_col(fill = "#3B6FB6", width = 0.7) +
+  geom_text(
+    data = filter(muni_per_year, n_municipalities %in% range(n_municipalities)),
+    aes(label = n_municipalities), vjust = -0.4, size = 3, colour = "grey20"
+  ) +
+  scale_x_continuous(breaks = seq(year_min, year_max, by = 1)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  labs(x = "Year", y = "Municipalities") +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+## Features of the file that affect its use
+
+Several properties of the file, unrelated to the observational unit itself, were noted during the inspection and are recorded here because they must be handled in any subsequent analysis.
+
+- **Year is stored as text with a thousands separator.** Values such as `2,024` must have the comma removed before conversion to an integer.
+- **Missing urban and rural values are coded as the string `ND`.** The whole-unit IRCA is always numeric, but the urban and rural columns use `ND` in place of a missing value, which prevents direct numeric import.
+- **Risk category labels are inconsistent.** Both "Alto riesgo" and "Riesgo alto", and both "Bajo riesgo" and "Riesgo bajo", appear in the file, so the labels must be harmonised before the categories are tabulated.
+- **Names are not stable identifiers.** Municipality code 76001 is named both "Cali" and "Santiago de Cali" in different years, and the department of San Andrés appears with two capitalisations of its name. The numeric codes, not the names, should be used as identifiers.
+
+# Conclusion
+
+The water quality measurements in this dataset are observed at the level of the municipality-year. Each municipal row summarises a year of drinking-water surveillance for one municipality into a single IRCA score and risk category, reported for the municipality as a whole and for its urban and rural areas. The file also contains department-year aggregates, marked with the code `#TODOS`, which are a coarser second set of units and must be separated from the municipal rows. Analyses of this dataset should treat the numeric department and municipality codes together with the year as the identifying key, clean the year and the `ND` placeholders on import, and harmonise the risk category labels.
