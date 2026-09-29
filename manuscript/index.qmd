@@ -11,11 +11,16 @@ abstract: |
 keywords: [water quality, IRCA, Colombia, observational unit, missing data, panel data]
 ---
 
+TODO: clean the comments, only leave those that explain a decision
+
 ```{r setup}
 #| include: false
 # _quarto.yml makes manuscript/ look like a project root to here(); pin the repo root.
 here::i_am("manuscript/index.qmd")
 source(here::here("R", "prepare.R"))
+# Packages beyond those loaded by prepare.R: ggplot2, scales, knitr, sf, patchwork
+# (DOCX and HTML); leaflet, reactable, htmltools (HTML only). There is no renv;
+# install missing ones from CRAN, e.g. install.packages("leaflet").
 library(ggplot2)
 library(scales)
 library(knitr)
@@ -67,6 +72,8 @@ tibble::tribble(
 ```
 
 Completeness needs a reference set of units that ought to be present. Two are used. The *internal* frame is every municipality code that appears at least once, crossed with every year that appears at least once; it asks whether the file is balanced on its own terms. The *external* frame is the municipal register of the DANE Marco Geoestadístico Nacional 2020 [@danemgn2020], which lists `r fmt_n(nrow(register))` units, minus the `r length(anm_codes)` non-municipalised areas of Amazonas, Guainía and Vaupés, which have no municipal administration and never appear in the file; that leaves `r fmt_n(n_register_muni)` municipalities and asks whether the country is covered. The register is a 2020 snapshot, so the few municipalities created after 2007 slightly overstate the external shortfall in early years. @fig-map shows the measurement and the coverage on that register.
+
+TODO: make the figure caption shorter
 
 ```{r}
 #| label: fig-map
@@ -121,7 +128,11 @@ p_irca + p_obs
 
 {{< pagebreak >}}
 
+TODO: restrict the linewidth to 80 characters
+
 # Question 1: What is the observational unit?
+
+TODO: Give meaningful names to the sections instead of the questions I gave
 
 ## What a row looks like
 
@@ -180,6 +191,8 @@ The municipal rows cover `r fmt_n(n_muni_codes)` municipality codes in `r n_dept
 
 ## Answer
 
+TODO: Give the document a more flowing style instead of question and answer
+
 The observational unit is the **municipality-year**. One row records, for one municipality in one calendar year, the annual IRCA of the municipality as a whole and of its urban and rural areas, with the risk band of each. The department-year rows marked `#TODOS` are a second, coarser set of units derived from the same surveillance; they must be separated from the municipal rows before any count or average, or departments will be counted twice.
 
 It is equally important what the unit is not. The IRCA of a municipality-year is a consolidation of many water samples taken over the year, but the samples, the supply systems, the sampling points and the months are not in the file, and the number of samples behind a value is unknown. A row is therefore the annual summary of a municipality's surveillance, not an observation of any water supply. For any join or panel construction the numeric code, not the name, is the key.
@@ -215,6 +228,8 @@ n_rural_inter <- sum(rural_pat$p > 0 & rural_pat$p < 1)
 rn <- muni |> filter(is.na(irca_rur), !is.na(irca_urb)) |> mutate(d = abs(irca - irca_urb))
 pct_total_eq_urban <- mean(rn$d < 0.051); n_total_ne_urban <- sum(rn$d > 1)
 ```
+
+TODO: If n_empty comes prom another script load it instead of just defining it
 
 No cell is empty (`r n_empty` empty cells), and the overall IRCA and its band are never missing (`r n_irca_nd` rows). Missingness lives entirely in the urban and rural components, encoded by `ND`, always for the value and its band together. In the municipal rows the rural index is missing in `r fmt_pct(pct_rural_nd)` of rows and the urban index in `r fmt_pct(pct_urban_nd)`; only `r fmt_pct(pct_all_three)` of rows carry all three indices, and `r fmt_n(n_both_nd)` rows carry an overall index with neither component. Department aggregates are better filled: the rural index is missing in `r fmt_pct(pct_dept_rural_nd)` of them. Every reported band agrees with the band implied by its value (`r label_agreement$n_disagree` disagreements in `r fmt_n(label_agreement$n)` values).
 
@@ -371,6 +386,8 @@ stopifnot(
 ```
 
 # References {.unnumbered}
+
+TODO: limit the number of references to 5
 
 ::: {#refs}
 :::
