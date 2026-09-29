@@ -5,6 +5,10 @@ project:
 manuscript:
   article: index.qmd
 
+lang: en
+
+bibliography: references.bib
+
 format:
   docx:
     toc: false
@@ -18,3 +22,4 @@ execute:
   echo: false
   warning: false
   message: false
+  freeze: false
