@@ -18,6 +18,7 @@ library(tidyr)
 library(knitr)
 library(ggplot2)
 library(scales)
+library(sf)
 
 raw <- read_csv(
   "../data/Calidad_del_Agua_para_Consumo_Humano_en_Colombia_20260915.csv",
@@ -107,11 +108,52 @@ n_with_gaps <- sum(muni_span$gaps > 0); n_gap_years <- sum(muni_span$gaps)
 n_late <- sum(muni_span$first > year_min); n_early <- sum(muni_span$last < year_max)
 n_five_or_fewer <- sum(muni_span$n <= 5)
 n_five_choco <- sum(muni_span$n <= 5 & muni_span$DepartamentoCodigo == "27")
+
+# Boundaries (DANE MGN 2020, via the Humanitarian Data Exchange), simplified
+mpio_sf <- st_read("../data/geo/col_admin.gpkg", layer = "municipalities", quiet = TRUE)
+dept_sf <- st_read("../data/geo/col_admin.gpkg", layer = "departments", quiet = TRUE)
+muni_codes <- unique(muni$MunicipioCodigo)
+never_obs <- mpio_sf |> st_drop_geometry() |> filter(!mpio_code %in% muni_codes)
+# Units in departments 91, 94 and 97 that never appear are all non-municipalised
+# areas (corregimientos departamentales), checked by name against the register.
+never_anm <- never_obs |> filter(dept_code %in% c("91", "94", "97"))
+never_muni <- never_obs |> filter(!dept_code %in% c("91", "94", "97"))
+n_never_muni <- nrow(never_muni); n_never_anm <- nrow(never_anm)
+never_muni_by_dept <- never_muni |> count(dept_name) |> arrange(desc(n))
+n_map_units <- nrow(mpio_sf)
+
+risk_breaks <- c(-Inf, 5, 14, 35, 80, Inf)
+risk_labels <- c("No risk (0–5)", "Low risk (5.1–14)", "Medium risk (14.1–35)",
+                 "High risk (35.1–80)", "Sanitarily unviable (80.1–100)")
+map_year <- best_year$year
+map_data <- mpio_sf |>
+  left_join(muni |> filter(year == map_year) |>
+              transmute(mpio_code = MunicipioCodigo, irca = as.numeric(IRCA)),
+            by = "mpio_code") |>
+  mutate(risk = cut(irca, risk_breaks, risk_labels, right = TRUE),
+         risk = forcats::fct_na_value_to_level(risk, "No record"))
 ```
 
 # Introduction
 
-The repository holds one data file, `Calidad_del_Agua_para_Consumo_Humano_en_Colombia_20260915.csv`, from Colombia's national drinking-water surveillance programme. Water samples collected by territorial health authorities are consolidated into the *Índice de Riesgo de la Calidad del Agua para Consumo Humano* (IRCA), a score from 0 to 100 that measures deviation from the standards of Resolution 2115 of 2007 and is mapped onto risk categories from "no risk" to "sanitarily unviable". This note answers the first two questions in `questions.md` from the structure of the file alone. The file was imported with every column as text, so that nothing was coerced silently; the year, stored as text with a thousands separator, was converted to an integer. All numbers below are computed from the file when the document is rendered.
+The repository holds one data file, `Calidad_del_Agua_para_Consumo_Humano_en_Colombia_20260915.csv`, from Colombia's national drinking-water surveillance programme. Water samples collected by territorial health authorities are consolidated into the *Índice de Riesgo de la Calidad del Agua para Consumo Humano* (IRCA), a score from 0 to 100 that measures deviation from the standards of Resolution 2115 of 2007 and is mapped onto risk categories from "no risk" to "sanitarily unviable". This note answers the first two questions in `questions.md` from the structure of the file alone. The file was imported with every column as text, so that nothing was coerced silently; the year, stored as text with a thousands separator, was converted to an integer. All numbers below are computed from the file when the document is rendered. @fig-map gives a first view of the measurement: the annual IRCA of every municipality in `r map_year`, the year in which the largest number of municipalities is reported, drawn on the DANE 2020 municipal boundaries and classed into the official risk categories of Resolution 2115.
+
+```{r}
+#| label: fig-map
+#| fig-cap: !expr 'paste0("Annual IRCA by municipality in ", map_year, ", the most complete year in the file, classed into the risk categories of Resolution 2115 of 2007. Grey municipalities have no record for that year. The Archipelago of San Andrés is outside the frame. Boundaries: DANE Marco Geoestadístico Nacional 2020.")'
+#| fig-width: 6.5
+#| fig-height: 6.2
+risk_cols <- c("#DCE6F2", "#A9C1E0", "#6E93C7", "#3560A6", "#14306B", "#D9D9D9")
+names(risk_cols) <- c(risk_labels, "No record")
+ggplot() +
+  geom_sf(data = map_data, aes(fill = risk), colour = "white", linewidth = 0.05) +
+  geom_sf(data = dept_sf, fill = NA, colour = "grey30", linewidth = 0.2) +
+  scale_fill_manual(values = risk_cols, name = NULL, drop = FALSE) +
+  coord_sf(xlim = c(-79.2, -66.8), ylim = c(-4.3, 12.6), expand = FALSE) +
+  theme_void(base_size = 9) +
+  theme(legend.position = "right", legend.key.size = unit(0.4, "cm"),
+        plot.margin = margin(2, 2, 2, 2))
+```
 
 {{< pagebreak >}}
 
@@ -168,7 +210,7 @@ The rural share fell from about three quarters of rows in `r year_min` to around
 
 ## Missing observational units
 
-The `r format(n_muni_codes, big.mark = ",")` municipality codes and `r n_years` years define `r format(grid_size, big.mark = ",")` municipality-years, of which `r format(n_missing_my, big.mark = ",")` (`r percent(pct_missing_my, accuracy = 0.1)`) are absent, so the panel is unbalanced. Coverage improved until `r best_year$year`, when only `r best_year$missing` municipalities were absent, and has weakened since 2020; `r worst_year$year` is the least complete year, with `r worst_year$missing` absent. The gaps are very unevenly distributed (@fig-heatmap). Only `r n_dept_complete` departments are complete over the whole period. Chocó is missing `r percent(choco$share, accuracy = 1)` of its municipality-years and has no rows of any kind before 2014; of the `r n_five_or_fewer` municipalities observed in five or fewer years, `r n_five_choco` are in Chocó. Guainía, Vaupés, Guaviare, Amazonas, Vichada and Córdoba also show substantial gaps. Department-level aggregates are absent in `r n_missing_dy` of `r dept_grid_size` department-years, always exactly when the department reported no municipality at all (`r n_dept_muni_inconsistent` exceptions). Municipalities that never appear cannot be detected from the file itself; DANE's register lists on the order of 1,100 municipalities, so a few are likely absent throughout, and no non-municipalised areas are included.
+The `r format(n_muni_codes, big.mark = ",")` municipality codes and `r n_years` years define `r format(grid_size, big.mark = ",")` municipality-years, of which `r format(n_missing_my, big.mark = ",")` (`r percent(pct_missing_my, accuracy = 0.1)`) are absent, so the panel is unbalanced. Coverage improved until `r best_year$year`, when only `r best_year$missing` municipalities were absent, and has weakened since 2020; `r worst_year$year` is the least complete year, with `r worst_year$missing` absent. The gaps are very unevenly distributed (@fig-heatmap). Only `r n_dept_complete` departments are complete over the whole period. Chocó is missing `r percent(choco$share, accuracy = 1)` of its municipality-years and has no rows of any kind before 2014; of the `r n_five_or_fewer` municipalities observed in five or fewer years, `r n_five_choco` are in Chocó. Guainía, Vaupés, Guaviare, Amazonas, Vichada and Córdoba also show substantial gaps. Department-level aggregates are absent in `r n_missing_dy` of `r dept_grid_size` department-years, always exactly when the department reported no municipality at all (`r n_dept_muni_inconsistent` exceptions). Joining the file to the DANE 2020 boundary register (`r format(n_map_units, big.mark = ",")` units) shows that every code in the file exists in the register, and that `r n_never_muni` municipalities never appear in any year (`r paste(paste(never_muni_by_dept$n, "in", never_muni_by_dept$dept_name), collapse = ", ")`), together with the `r n_never_anm` non-municipalised areas of Amazonas, Guainía and Vaupés.
 
 ```{r}
 #| label: fig-heatmap
