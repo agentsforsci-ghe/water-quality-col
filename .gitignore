@@ -6,3 +6,8 @@ manuscript/.quarto/
 manuscript/index_files/
 .DS_Store
 ~$*.docx
+manuscript/_manuscript/site_libs/
+manuscript/_manuscript/index_files/
+manuscript/_manuscript/*-preview.html
+manuscript/_manuscript/search.json
+manuscript/_manuscript/*.ipynb
