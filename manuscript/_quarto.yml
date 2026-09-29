@@ -4,12 +4,29 @@ project:
 
 manuscript:
   article: index.qmd
+  meca-bundle: false
+
+lang: en
+
+bibliography: references.bib
 
 format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    notebook-links: false
+    notebook-view: false
+    format-links: false
+    fig-width: 6.5
+    fig-height: 4
+    fig-dpi: 150
   docx:
     toc: false
-    notebook-links: false
     number-sections: true
+    notebook-links: false
+    notebook-view: false
     fig-width: 6.5
     fig-height: 4
     fig-dpi: 300
@@ -18,3 +35,4 @@ execute:
   echo: false
   warning: false
   message: false
+  freeze: false

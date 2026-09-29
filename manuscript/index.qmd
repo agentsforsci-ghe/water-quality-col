@@ -1,239 +1,750 @@
 ---
-title: "Structure and completeness of Colombia's drinking-water quality data"
-subtitle: "Answers to questions 1 and 2 on the *Calidad del Agua para Consumo Humano en Colombia* dataset"
+title: >-
+  What the Colombian drinking-water quality file measures,
+  and how much of it is there
+subtitle: >-
+  Structure and completeness of the *Calidad del Agua para Consumo Humano en
+  Colombia* dataset
 author:
   - name: Adriana Clavijo Daza
     affiliations:
       - name: ETH Zurich
 date: last-modified
 abstract: |
-  This note answers the first two questions posed for the Colombian drinking-water quality dataset held in this repository. Question 1 asks for the observational unit of the measurements: it is the municipality-year. Each row carries the annual Water Quality Risk Index (IRCA) and its risk category for one municipality in one calendar year, for the municipality as a whole and for its urban and rural areas, and a smaller set of department-year aggregates is stacked in the same file. Question 2 asks how complete the data are. The overall IRCA is never missing and every calendar year from 2007 to 2024 is present, but the rural component is unavailable in about half of all municipal rows, about 6% of municipality-years are absent from the implied panel, with the shortfall concentrated in Chocó and the Amazon and Orinoco departments, and roughly a quarter of municipalities have an interrupted series.
-keywords: [water quality, IRCA, Colombia, observational unit, missing data, panel data]
+  This note describes what the Colombian drinking-water quality file held in
+  this repository measures and how complete it is. The observational unit is
+  the municipality-year: each row carries the annual Water Quality Risk Index
+  (IRCA) of one municipality in one calendar year, with separate values for
+  the whole municipality, its urban area and its rural area, and
+  department-year aggregates are stacked in the same file. The overall IRCA
+  is never missing and every calendar year from 2007 to 2024 is present, but
+  the rural index is unavailable in about half of the municipal rows, about
+  6% of the municipality-years that the national municipal register implies
+  are absent, two thirds of municipalities have an uninterrupted series, and
+  Chocó is missing more than four fifths of its municipality-years.
+keywords:
+  - water quality
+  - IRCA
+  - Colombia
+  - observational unit
+  - missing data
+  - panel data
 ---
 
 ```{r setup}
-library(dplyr)
-library(readr)
-library(tidyr)
-library(knitr)
+#| include: false
+# _quarto.yml makes manuscript/ look like a project root to here(), so the
+# repository root is pinned explicitly.
+here::i_am("manuscript/index.qmd")
+source(here::here("R", "prepare.R"))
+# There is no renv: packages are installed from CRAN by hand. Beyond those
+# loaded by prepare.R, both formats need ggplot2, scales, knitr, sf and
+# patchwork; the HTML also needs leaflet, reactable and htmltools.
 library(ggplot2)
 library(scales)
+library(knitr)
 library(sf)
+library(patchwork)
 
-raw <- read_csv(
-  "../data/Calidad_del_Agua_para_Consumo_Humano_en_Colombia_20260915.csv",
-  col_types = cols(.default = col_character())
+dept_short <- dept_names |>
+  transmute(dept_code,
+            dept_label = case_when(
+              dept_code == "88" ~ "San Andrés y Providencia",
+              dept_code == "11" ~ "Bogotá D.C.",
+              TRUE ~ dept_name))
+
+# One blue ramp for magnitudes and fixed categorical hues for series, so a
+# colour never carries two meanings across figures.
+blue_ramp <- c("#cde2fb", "#86b6ef", "#3987e5", "#1c5cab", "#0d366b")
+grey_none <- "#e1e0d9"
+grey_na <- "#f4f3ef"
+col_urban <- "#2a78d6"
+col_rural <- "#eb6834"
+col_both <- "#1baf7a"
+theme_set(
+  theme_minimal(base_size = 8) +
+    theme(panel.grid.minor = element_blank(),
+          panel.grid.major = element_line(colour = "#e1e0d9",
+                                          linewidth = 0.25),
+          axis.ticks = element_blank(),
+          legend.key.size = unit(0.35, "cm")))
+```
+
+# Data and validation
+
+The repository holds one file,
+`Calidad_del_Agua_para_Consumo_Humano_en_Colombia_20260915.csv`, published on
+Colombia's open-data portal from the national drinking-water surveillance
+system [@sivicap2026]. Territorial health authorities sample water supplies
+through the year, and the samples are consolidated into the *Índice de Riesgo
+de la Calidad del Agua para Consumo Humano* (IRCA), a 0 to 100 score of
+deviation from the standards of Resolution 2115 of 2007, classed into five
+risk bands: no risk (0 to 5), low (5.1 to 14), medium (14.1 to 35), high
+(35.1 to 80) and sanitarily unviable (above 80) [@res2115]. This note
+describes the structure of the file and then assesses its completeness.
+
+The file was imported with every column as text, and the structure that the
+rest of this note relies on was asserted in code rather than assumed: the
+column set, the row count, the absence of empty cells, the format of the
+codes, the parsing of the year, the fact that the token `ND` is the only
+non-numeric value in the index columns, the spelling set of the risk labels,
+and the uniqueness of the keys (`r length(checks)` checks, all passing at
+render time). @tbl-columns describes the columns and what was done to each
+on import.
+
+```{r}
+#| label: columns-data
+#| include: false
+cols_df <- tibble::tribble(
+  ~Column, ~Role, ~`Cleaned type`, ~`Note on import`,
+  "DepartamentoCodigo", "Identifier", "Character key",
+  "Two-digit DANE code, leading zero kept",
+  "Departamento", "Identifier", "Label",
+  "Name; one department has two spellings",
+  "MunicipioCodigo", "Identifier", "Character key",
+  "Five-digit DANE code; `#TODOS` marks a department aggregate",
+  "Municipio", "Identifier", "Label",
+  "Name; not stable across years",
+  "Año", "Identifier", "Integer",
+  "Stored as text with a thousands separator (2,024)",
+  "IRCA", "Measurement", "Numeric 0–100",
+  "Annual index, whole unit",
+  "Nivel de riesgo", "Measurement", "5-level factor",
+  "Two spellings per band mapped to one",
+  "IRCAurbano", "Measurement", "Numeric 0–100",
+  "Urban area; `ND` read as missing",
+  "Nivel de riesgo urbano", "Measurement", "5-level factor",
+  "Missing when the value is `ND`",
+  "IRCArural", "Measurement", "Numeric 0–100",
+  "Rural area; `ND` read as missing",
+  "Nivel de riesgo rural", "Measurement", "5-level factor",
+  "Missing when the value is `ND`"
 )
+```
 
-d <- raw |>
-  mutate(
-    year = as.integer(gsub(",", "", Año)),
-    level = if_else(MunicipioCodigo == "#TODOS", "Department", "Municipality")
-  )
-dept_names <- d |>
-  distinct(DepartamentoCodigo, Departamento) |>
-  group_by(DepartamentoCodigo) |> slice(1) |> ungroup() |>
-  mutate(Departamento = if_else(DepartamentoCodigo == "88",
-                                "San Andrés y Providencia", Departamento))
-muni <- filter(d, level == "Municipality")
-dept <- filter(d, level == "Department")
+:::: {.content-visible unless-format="html"}
+::: {#tbl-columns}
+```{r}
+#| label: columns-kable
+#| eval: !expr isFALSE(knitr::is_html_output())
+kable(cols_df)
+```
+Columns of the data file, their role, and how each was treated on import.
+:::
+::::
 
-years <- sort(unique(d$year)); n_years <- length(years)
-year_min <- min(years); year_max <- max(years)
+:::: {.content-visible when-format="html"}
+::: {#tbl-columns}
+```{r}
+#| label: columns-reactable
+#| eval: !expr knitr::is_html_output()
+library(reactable)
+code_html <- function(x) gsub("`([^`]+)`", "<code>\\1</code>", x)
+reactable(
+  cols_df |> mutate(`Note on import` = code_html(`Note on import`)),
+  sortable = TRUE, searchable = FALSE, pagination = FALSE, compact = TRUE,
+  highlight = TRUE, width = "100%",
+  columns = list(
+    Column = colDef(minWidth = 150, style = list(fontFamily = "monospace")),
+    Role = colDef(minWidth = 90),
+    `Cleaned type` = colDef(minWidth = 110),
+    `Note on import` = colDef(minWidth = 260, html = TRUE)))
+```
+Columns of the data file, their role, and how each was treated on import.
+Click a header to sort.
+:::
+::::
 
-# Question 1
-n_rows <- nrow(d); n_cols <- ncol(raw)
-n_muni_rows <- nrow(muni); n_dept_rows <- nrow(dept)
-n_muni_codes <- n_distinct(muni$MunicipioCodigo)
-n_dept_codes <- n_distinct(d$DepartamentoCodigo)
-n_dup <- sum(duplicated(d[, c("DepartamentoCodigo", "MunicipioCodigo", "year")]))
-n_prefix_mismatch <- sum(substr(muni$MunicipioCodigo, 1, 2) != muni$DepartamentoCodigo)
+Completeness needs a reference set of units that ought to be present. Two
+are used. The *internal* frame is every municipality code that appears at
+least once, crossed with every year that appears at least once; it asks
+whether the file is balanced on its own terms. The *external* frame is the
+municipal register of the DANE Marco Geoestadístico Nacional 2020
+[@danemgn2020], which lists `r fmt_n(nrow(register))` units, minus the
+`r length(anm_codes)` non-municipalised areas of Amazonas, Guainía and
+Vaupés, which have no municipal administration and never appear in the file;
+that leaves `r fmt_n(n_register_muni)` municipalities and asks whether the
+country is covered. The register is a 2020 snapshot, so the few
+municipalities created after 2007 slightly overstate the external shortfall
+in early years. @fig-map shows the measurement and the coverage on that
+register.
 
-# Question 2: values
-n_empty <- sum(sapply(raw, function(x) sum(is.na(x) | trimws(x) == "")))
-n_nd_mismatch <- sum((d$IRCAurbano == "ND") != (d$`Nivel de riesgo urbano` == "ND")) +
-  sum((d$IRCArural == "ND") != (d$`Nivel de riesgo rural` == "ND"))
-muni_nd <- muni |> mutate(urban_nd = IRCAurbano == "ND", rural_nd = IRCArural == "ND")
-nd_pattern <- muni_nd |> count(urban_nd, rural_nd) |> mutate(share = n / sum(n))
-n_both_nd <- nd_pattern |> filter(urban_nd, rural_nd) |> pull(n)
-pct_rural_nd <- mean(muni_nd$rural_nd); pct_urban_nd <- mean(muni_nd$urban_nd)
-nd_year <- muni_nd |> group_by(year) |>
-  summarise(urban = mean(urban_nd), rural = mean(rural_nd), .groups = "drop")
-urban_peak <- slice_max(nd_year, urban, n = 1)
-rural_pattern <- muni_nd |> group_by(MunicipioCodigo) |>
-  summarise(p = mean(rural_nd), .groups = "drop")
-n_rural_always <- sum(rural_pattern$p == 1); n_rural_never <- sum(rural_pattern$p == 0)
-rn <- muni_nd |> filter(rural_nd, !urban_nd) |>
-  mutate(diff = abs(as.numeric(IRCA) - as.numeric(IRCAurbano)))
-pct_total_eq_urban <- mean(rn$diff < 0.051); n_total_ne_urban <- sum(rn$diff > 1)
+```{r}
+#| label: map-data
+#| include: false
+by_year_ext <- frame_external |>
+  group_by(year) |>
+  summarise(missing = sum(!observed), observed = sum(observed),
+            .groups = "drop")
+stopifnot(all(by_year_ext$missing + by_year_ext$observed == n_register_muni))
+map_year <- by_year_ext |>
+  slice_max(observed, n = 1, with_ties = FALSE) |>
+  pull(year)
 
-# Question 2: units
-grid_size <- n_muni_codes * n_years
-n_missing_my <- grid_size - n_muni_rows; pct_missing_my <- n_missing_my / grid_size
-missing_by_year <- muni |> count(year, name = "observed") |>
-  mutate(missing = n_muni_codes - observed)
-best_year <- slice_min(missing_by_year, missing, n = 1, with_ties = FALSE)
-worst_year <- slice_max(missing_by_year, missing, n = 1, with_ties = FALSE)
-muni_span <- muni |> group_by(DepartamentoCodigo, MunicipioCodigo) |>
-  summarise(n = n(), first = min(year), last = max(year), .groups = "drop") |>
-  mutate(span = last - first + 1, gaps = span - n)
-missing_by_dept <- muni_span |> group_by(DepartamentoCodigo) |>
-  summarise(municipalities = n(), observed = sum(n), .groups = "drop") |>
-  mutate(grid = municipalities * n_years, missing = grid - observed,
-         share = missing / grid) |>
-  left_join(dept_names, by = "DepartamentoCodigo") |> arrange(desc(share))
-n_dept_complete <- sum(missing_by_dept$missing == 0)
-choco <- filter(missing_by_dept, DepartamentoCodigo == "27")
-dept_year_grid <- muni_span |> distinct(DepartamentoCodigo, MunicipioCodigo) |>
-  crossing(year = years) |>
-  left_join(muni |> distinct(MunicipioCodigo, year) |> mutate(obs = TRUE),
-            by = c("MunicipioCodigo", "year")) |>
-  mutate(obs = !is.na(obs)) |>
-  group_by(DepartamentoCodigo, year) |>
-  summarise(share_missing = mean(!obs), .groups = "drop") |>
-  left_join(dept_names, by = "DepartamentoCodigo")
-dept_grid_size <- n_dept_codes * n_years
-n_missing_dy <- dept_grid_size - n_dept_rows
-n_dept_muni_inconsistent <-
-  nrow(anti_join(distinct(muni, DepartamentoCodigo, year), dept,
-                 by = c("DepartamentoCodigo", "year"))) +
-  nrow(anti_join(distinct(dept, DepartamentoCodigo, year),
-                 distinct(muni, DepartamentoCodigo, year),
-                 by = c("DepartamentoCodigo", "year")))
+mpio_sf <- st_read(gpkg_file, layer = "municipalities", quiet = TRUE)
+dept_sf <- st_read(gpkg_file, layer = "departments", quiet = TRUE)
+years_obs <- frame_external |>
+  group_by(mpio_code) |>
+  summarise(n_obs = sum(observed), .groups = "drop")
 
-# Question 2: years
-n_calendar_gaps <- length(setdiff(seq(year_min, year_max), years))
-n_full <- sum(muni_span$n == n_years)
-n_with_gaps <- sum(muni_span$gaps > 0); n_gap_years <- sum(muni_span$gaps)
-n_late <- sum(muni_span$first > year_min); n_early <- sum(muni_span$last < year_max)
-n_five_or_fewer <- sum(muni_span$n <= 5)
-n_five_choco <- sum(muni_span$n <= 5 & muni_span$DepartamentoCodigo == "27")
-
-# Boundaries (DANE MGN 2020, via the Humanitarian Data Exchange), simplified
-mpio_sf <- st_read("../data/geo/col_admin.gpkg", layer = "municipalities", quiet = TRUE)
-dept_sf <- st_read("../data/geo/col_admin.gpkg", layer = "departments", quiet = TRUE)
-muni_codes <- unique(muni$MunicipioCodigo)
-never_obs <- mpio_sf |> st_drop_geometry() |> filter(!mpio_code %in% muni_codes)
-# Units in departments 91, 94 and 97 that never appear are all non-municipalised
-# areas (corregimientos departamentales), checked by name against the register.
-never_anm <- never_obs |> filter(dept_code %in% c("91", "94", "97"))
-never_muni <- never_obs |> filter(!dept_code %in% c("91", "94", "97"))
-n_never_muni <- nrow(never_muni); n_never_anm <- nrow(never_anm)
-never_muni_by_dept <- never_muni |> count(dept_name) |> arrange(desc(n))
-n_map_units <- nrow(mpio_sf)
-
-risk_breaks <- c(-Inf, 5, 14, 35, 80, Inf)
-risk_labels <- c("No risk (0–5)", "Low risk (5.1–14)", "Medium risk (14.1–35)",
-                 "High risk (35.1–80)", "Sanitarily unviable (80.1–100)")
-map_year <- best_year$year
-map_data <- mpio_sf |>
-  left_join(muni |> filter(year == map_year) |>
-              transmute(mpio_code = MunicipioCodigo, irca = as.numeric(IRCA)),
+map_sf <- mpio_sf |>
+  left_join(muni |> filter(year == map_year) |> select(mpio_code, irca),
             by = "mpio_code") |>
-  mutate(risk = cut(irca, risk_breaks, risk_labels, right = TRUE),
-         risk = forcats::fct_na_value_to_level(risk, "No record"))
+  left_join(years_obs, by = "mpio_code") |>
+  mutate(anm = mpio_code %in% anm_codes,
+         risk = cut(irca, risk_breaks, labels = risk_levels, right = TRUE),
+         risk = as.character(risk),
+         risk = case_when(anm ~ "Not expected",
+                          is.na(risk) ~ "No record",
+                          TRUE ~ risk),
+         risk = factor(risk, levels = c(risk_levels, "No record",
+                                        "Not expected")),
+         n_obs = if_else(anm, NA_integer_, n_obs))
+never_sf <- filter(map_sf, !anm, n_obs == 0)
+# The captions and the issue that requested the map name 2019 explicitly.
+stopifnot(map_year == 2019L)
 ```
 
-# Introduction
-
-The repository holds one data file, `Calidad_del_Agua_para_Consumo_Humano_en_Colombia_20260915.csv`, from Colombia's national drinking-water surveillance programme. Water samples collected by territorial health authorities are consolidated into the *Índice de Riesgo de la Calidad del Agua para Consumo Humano* (IRCA), a score from 0 to 100 that measures deviation from the standards of Resolution 2115 of 2007 and is mapped onto risk categories from "no risk" to "sanitarily unviable". This note answers the first two questions in `questions.md` from the structure of the file alone. The file was imported with every column as text, so that nothing was coerced silently; the year, stored as text with a thousands separator, was converted to an integer. All numbers below are computed from the file when the document is rendered. @fig-map gives a first view of the measurement: the annual IRCA of every municipality in `r map_year`, the year in which the largest number of municipalities is reported, drawn on the DANE 2020 municipal boundaries and classed into the official risk categories of Resolution 2115.
-
+:::: {.content-visible unless-format="html"}
+::: {#fig-map}
 ```{r}
-#| label: fig-map
-#| fig-cap: !expr 'paste0("Annual IRCA by municipality in ", map_year, ", the most complete year in the file, classed into the risk categories of Resolution 2115 of 2007. Grey municipalities have no record for that year. The Archipelago of San Andrés is outside the frame. Boundaries: DANE Marco Geoestadístico Nacional 2020.")'
+#| label: map-static
+#| eval: !expr isFALSE(knitr::is_html_output())
 #| fig-width: 6.5
-#| fig-height: 6.2
-risk_cols <- c("#DCE6F2", "#A9C1E0", "#6E93C7", "#3560A6", "#14306B", "#D9D9D9")
-names(risk_cols) <- c(risk_labels, "No record")
-ggplot() +
-  geom_sf(data = map_data, aes(fill = risk), colour = "white", linewidth = 0.05) +
-  geom_sf(data = dept_sf, fill = NA, colour = "grey30", linewidth = 0.2) +
-  scale_fill_manual(values = risk_cols, name = NULL, drop = FALSE) +
-  coord_sf(xlim = c(-79.2, -66.8), ylim = c(-4.3, 12.6), expand = FALSE) +
-  theme_void(base_size = 9) +
-  theme(legend.position = "right", legend.key.size = unit(0.4, "cm"),
-        plot.margin = margin(2, 2, 2, 2))
+#| fig-height: 4.6
+base_map <- function() {
+  list(geom_sf(data = dept_sf, fill = NA, colour = "#52514e",
+               linewidth = 0.18),
+       coord_sf(xlim = c(-79.2, -66.8), ylim = c(-4.3, 12.6),
+                expand = FALSE),
+       theme_void(base_size = 7.5),
+       theme(legend.position = "bottom",
+             legend.key.size = unit(0.3, "cm"),
+             legend.text = element_text(size = 6.5),
+             legend.title = element_text(size = 7),
+             plot.margin = margin(0, 2, 0, 2)))
+}
+risk_cols <- c(setNames(blue_ramp, risk_levels),
+               "No record" = grey_none, "Not expected" = grey_na)
+p_irca <- ggplot() +
+  geom_sf(data = map_sf, aes(fill = risk), colour = "white",
+          linewidth = 0.04) +
+  scale_fill_manual(values = risk_cols, name = paste("IRCA", map_year),
+                    drop = FALSE) +
+  guides(fill = guide_legend(nrow = 3, byrow = TRUE,
+                             title.position = "top")) +
+  base_map()
+p_obs <- ggplot() +
+  geom_sf(data = map_sf, aes(fill = n_obs), colour = "white",
+          linewidth = 0.04) +
+  geom_sf(data = never_sf, fill = NA, colour = col_rural,
+          linewidth = 0.45) +
+  scale_fill_gradient(low = blue_ramp[1], high = blue_ramp[5],
+                      limits = c(0, n_years), breaks = c(0, 6, 12, 18),
+                      na.value = grey_na, name = "Years in file") +
+  guides(fill = guide_colourbar(title.position = "top",
+                                barwidth = unit(3, "cm"),
+                                barheight = unit(0.25, "cm"))) +
+  base_map()
+p_irca + p_obs
 ```
+Annual IRCA by municipality in `r map_year` (left) and number of years, out
+of `r n_years`, in which each municipality appears in the file (right).
+Municipalities that never appear are outlined in orange; non-municipalised
+areas are not expected. Boundaries: DANE 2020.
+:::
+::::
+
+:::: {.content-visible when-format="html"}
+::: {#fig-map}
+```{r}
+#| label: map-html
+#| eval: !expr knitr::is_html_output()
+library(leaflet)
+library(htmltools)
+# The web copy of the boundaries is simplified and rounded so the embedded
+# page stays small; the DOCX map keeps the full geometry.
+slim <- function(x, tol = 500) {
+  g <- st_geometry(x) |>
+    st_transform(3116) |>
+    st_simplify(dTolerance = tol, preserveTopology = TRUE) |>
+    st_transform(4326) |>
+    st_cast("MULTIPOLYGON")
+  g <- st_as_sfc(st_as_binary(st_set_precision(g, 1e5)), crs = 4326)
+  st_set_geometry(x, g)
+}
+map_web <- slim(map_sf) |> left_join(dept_short, by = "dept_code")
+dept_web <- slim(dept_sf) |> st_cast("MULTILINESTRING")
+stopifnot(nrow(map_web) == nrow(map_sf), !any(st_is_empty(map_web)),
+          all(st_is_valid(map_web)))
+
+map_web <- map_web |>
+  mutate(tip = case_when(
+    anm ~ sprintf("<b>%s</b><br/>%s<br/>Non-municipalised area (not expected)",
+                  htmlEscape(mpio_name), htmlEscape(dept_label)),
+    is.na(irca) ~ sprintf("<b>%s</b><br/>%s<br/>No record for %d",
+                          htmlEscape(mpio_name), htmlEscape(dept_label),
+                          map_year),
+    TRUE ~ sprintf("<b>%s</b><br/>%s<br/>IRCA %d: %s (%s)",
+                   htmlEscape(mpio_name), htmlEscape(dept_label), map_year,
+                   formatC(irca, format = "f", digits = 1),
+                   as.character(risk))))
+
+risk_pal <- colorFactor(c(blue_ramp, grey_none, grey_na),
+                        levels = levels(map_web$risk))
+bb <- st_bbox(filter(map_web, dept_code != "88"))
+
+leaflet(map_web, width = "100%", height = 600,
+        options = leafletOptions(minZoom = 4, maxZoom = 11)) |>
+  addProviderTiles(providers$CartoDB.Positron) |>
+  addPolygons(fillColor = ~risk_pal(risk), fillOpacity = 0.9,
+              color = "white", weight = 0.3, opacity = 1,
+              label = ~lapply(tip, HTML),
+              labelOptions = labelOptions(textsize = "12px"),
+              highlightOptions = highlightOptions(weight = 1.5,
+                                                  color = "#52514e",
+                                                  bringToFront = TRUE)) |>
+  addPolylines(data = dept_web, color = "#52514e", weight = 0.8,
+               opacity = 1) |>
+  addLegend("bottomright", pal = risk_pal, values = ~risk,
+            title = paste("IRCA", map_year), opacity = 0.9) |>
+  fitBounds(bb[["xmin"]], bb[["ymin"]], bb[["xmax"]], bb[["ymax"]])
+```
+Annual IRCA by municipality in `r map_year`, the year with the most
+municipalities reported, classed into the risk bands of Resolution 2115.
+Hover over a municipality for its name, department and index.
+Non-municipalised areas are not expected in the file. Boundaries: DANE 2020,
+simplified.
+:::
+::::
 
 {{< pagebreak >}}
 
-# Question 1: What is the observational unit?
+# The observational unit
 
-## Structure of the file
-
-The file has `r format(n_rows, big.mark = ",")` rows and `r n_cols` columns (@tbl-vars). Four columns identify a place, one identifies a calendar year, and six are measurements: a numeric IRCA and its risk category, reported for the whole territorial unit, for its urban area and for its rural area.
+## What a row looks like
 
 ```{r}
-#| label: tbl-vars
-#| tbl-cap: "Columns of the data file and their interpretation."
-tibble::tribble(
-  ~Column, ~Role, ~Content,
-  "DepartamentoCodigo", "Identifier", "Two-digit DANE code of the department (33 values; Bogotá D.C. is code 11)",
-  "Departamento", "Identifier", "Department name",
-  "MunicipioCodigo", "Identifier", "Five-digit DANE municipality code, prefixed by the department code; #TODOS marks a department-level aggregate",
-  "Municipio", "Identifier", "Municipality name; #TODOS for department-level aggregates",
-  "Año", "Identifier", "Calendar year, stored as text with a thousands separator (2,024)",
-  "IRCA", "Measurement", "Annual IRCA (0 to 100) for the whole unit",
-  "Nivel de riesgo", "Measurement", "Risk category derived from IRCA",
-  "IRCAurbano", "Measurement", "Annual IRCA for the urban area; ND when not available",
-  "Nivel de riesgo urbano", "Measurement", "Risk category derived from IRCAurbano",
-  "IRCArural", "Measurement", "Annual IRCA for the rural area; ND when not available",
-  "Nivel de riesgo rural", "Measurement", "Risk category derived from IRCArural"
-) |> kable()
+#| include: false
+n_rows <- nrow(wq)
+n_cols <- ncol(raw)
+ex_rows <- bind_rows(
+  raw |> filter(MunicipioCodigo == "76001", Año %in% c("2,023", "2,024")),
+  raw |> filter(DepartamentoCodigo == "76", MunicipioCodigo != "#TODOS",
+                Año == "2,024", IRCArural == "ND") |> slice(1),
+  raw |> filter(DepartamentoCodigo == "76", MunicipioCodigo == "#TODOS",
+                Año == "2,024")
+) |>
+  select(DepartamentoCodigo, MunicipioCodigo, Municipio, Año, IRCA,
+         IRCAurbano, IRCArural)
 ```
 
-## Two levels of aggregation and one key
+The file has `r fmt_n(n_rows)` rows and `r n_cols` columns. @tbl-example
+reproduces four rows verbatim. Each row names a place and a year and reports
+three indices: one for the whole territorial unit, one for its urban area
+and one for its rural area, each accompanied in the full file by a risk band
+derived from it. The same municipality code recurs year after year, so a row
+is not a place but a place in a year. The name attached to a code can change
+between years while the code stays fixed. The token `ND` stands in for a
+component that was not reported. The fourth row carries `#TODOS` in place of
+a municipality: it describes the department as a whole for that year, and
+`r fmt_n(nrow(dept))` such rows are interleaved with the
+`r fmt_n(nrow(muni))` municipal rows.
 
-The municipality columns take the value `#TODOS` ("all") in `r n_dept_rows` rows. These rows name a department but no municipality, and their IRCA values describe the department as a whole. The other `r format(n_muni_rows, big.mark = ",")` rows carry a genuine five-digit municipality code. The file therefore stacks two levels of aggregation: municipal rows and departmental rows.
+```{r}
+#| label: tbl-example
+#| tbl-cap: >-
+#|   Four rows of the file, reproduced verbatim: the same municipality in
+#|   two consecutive years under two names, a municipality with no rural
+#|   index, and the department-level aggregate for the same department and
+#|   year.
+kable(ex_rows)
+```
 
-The combination of department code, municipality code and year identifies every row exactly once (`r n_dup` duplicates). Within the municipal rows, municipality code and year suffice, because the municipality code embeds the department code as its first two digits in every row (`r n_prefix_mismatch` mismatches). Within the departmental rows, department code and year suffice. The municipal rows cover `r format(n_muni_codes, big.mark = ",")` municipality codes in `r n_dept_codes` departments over `r n_years` years, from `r year_min` to `r year_max`.
+## What identifies a row
 
-## Answer
+```{r}
+#| include: false
+key_check <- function(df, cols, label) {
+  k <- df[cols]
+  tibble(`Candidate key` = label,
+         `Distinct values` = fmt_n(nrow(distinct(k))),
+         Rows = fmt_n(nrow(k)),
+         `Duplicated rows` = fmt_n(sum(duplicated(k))))
+}
+raw_muni <- raw |> filter(MunicipioCodigo != "#TODOS")
+raw_dept <- raw |> filter(MunicipioCodigo == "#TODOS")
+keys_tbl <- bind_rows(
+  key_check(raw_muni, "MunicipioCodigo", "Municipality code"),
+  key_check(raw_muni, c("Municipio", "Año"), "Municipality name + year"),
+  key_check(raw_muni, c("Departamento", "Municipio", "Año"),
+            "Department name + municipality name + year"),
+  key_check(raw_muni, c("MunicipioCodigo", "Año"),
+            "Municipality code + year"),
+  key_check(raw_dept, c("DepartamentoCodigo", "Año"),
+            "Department code + year (aggregate rows)")
+)
+```
 
-The observational unit of the water quality measurements is the **municipality-year**. Each municipal row records, for one municipality and one calendar year, the annual IRCA score and risk category for the municipality as a whole and separately for its urban and rural areas. The department-year rows marked `#TODOS` are aggregates derived from the same surveillance data; they form a second, coarser set of units and should be separated from the municipal rows rather than mixed with them.
+@tbl-keys tests candidate identifiers on the municipal rows. A municipality
+code alone recurs across years. A municipality name with a year is not
+unique either, because `r n_names_multi_code` names are shared by
+municipalities in different departments. Adding the department name makes
+the key unique, but names are not stable: municipality 76001 appears as
+"Santiago de Cali" and as "Cali", and over the period more than one name is
+attached to `r n_codes_multi_name` of the `r fmt_n(n_muni_codes)` codes. The
+municipality code with the year identifies every municipal row exactly once,
+and because the first two digits of every municipality code equal the
+department code, the department adds no information. On the aggregate rows,
+department code with year is likewise unique.
 
-It is worth stating what the unit is not. The IRCA is computed from many individual water samples taken over the year, but those samples are not in the file. A row is not a sample, a water supply system, a sampling site or a month; it is the annual consolidation of all samples in a municipality, and the number of samples behind each value is unknown.
+```{r}
+#| label: tbl-keys
+#| tbl-cap: >-
+#|   Candidate identifiers tested on the municipal rows and, in the last
+#|   line, on the department aggregate rows.
+kable(keys_tbl, align = "lrrr")
+```
 
-Four further properties of the file must be handled on import. The year carries a thousands separator. Missing urban and rural values are coded as the string `ND` rather than left empty. The risk labels are spelled inconsistently ("Alto riesgo" and "Riesgo alto" both occur). Names are not stable identifiers: municipality 76001 is "Cali" in some years and "Santiago de Cali" in others, so the numeric codes, not the names, should be used as keys.
+The municipal rows cover `r fmt_n(n_muni_codes)` municipality codes in
+`r n_dept_codes` departments over `r n_years` years, `r year_min` to
+`r year_max`.
+
+## The municipality-year and its limits
+
+The observational unit is therefore the **municipality-year**. One row
+records, for one municipality in one calendar year, the annual IRCA of the
+municipality as a whole and of its urban and rural areas, with the risk band
+of each. The department-year rows marked `#TODOS` are a second, coarser set
+of units derived from the same surveillance; they must be separated from the
+municipal rows before any count or average, or departments will be counted
+twice.
+
+It is equally important what the unit is not. The IRCA of a
+municipality-year is a consolidation of many water samples taken over the
+year, but the samples, the supply systems, the sampling points and the
+months are not in the file, and the number of samples behind a value is
+unknown. A row is the annual summary of a municipality's surveillance, not
+an observation of any water supply. For any join or panel construction the
+numeric code, not the name, is the key.
 
 {{< pagebreak >}}
 
-# Question 2: How complete are the data?
+# Completeness of the data
 
-Completeness is examined at three levels: values within a row, municipalities within a year, and years within a municipality's series. The file carries no list of the municipalities that ought to be present, so the reference set is defined internally as every municipality code that appears at least once, crossed with every year that appears at least once.
+Incompleteness can occur at three levels, and the picture differs at each. A
+row can exist but lack a value (a missing value). A municipality can lack a
+row in a year in which other municipalities have one (a missing unit). A
+year can be absent altogether, or absent from the series of a particular
+municipality (a missing year).
 
-## Missing values in the measurements
+## Missing values within rows
 
-No cell in the file is empty (`r n_empty` empty cells). Missingness is encoded by the string `ND`, which appears only in the four urban and rural measurement columns; the overall IRCA and its risk category are never missing. The value and the risk category of a component are always missing together (`r n_nd_mismatch` exceptions). Within municipal rows the rural IRCA is `ND` in `r percent(pct_rural_nd, accuracy = 1)` of rows and the urban IRCA in `r percent(pct_urban_nd, accuracy = 1)`; only `r percent(nd_pattern |> filter(!urban_nd, !rural_nd) |> pull(share), accuracy = 1)` of rows carry all three indices, and in `r format(n_both_nd, big.mark = ",")` rows both components are missing while the overall index is present, so the overall index is not simply computed from the two components as they appear in the file.
+```{r}
+#| include: false
+nd_pat <- muni |>
+  mutate(u = is.na(irca_urb), r = is.na(irca_rur)) |>
+  count(u, r) |>
+  mutate(share = n / sum(n))
+pct_rural_nd <- mean(is.na(muni$irca_rur))
+pct_urban_nd <- mean(is.na(muni$irca_urb))
+pct_all_three <- nd_pat |> filter(!u, !r) |> pull(share)
+n_both_nd <- nd_pat |> filter(u, r) |> pull(n)
+pct_dept_rural_nd <- mean(is.na(dept$irca_rur))
+nd_year <- muni |>
+  group_by(year) |>
+  summarise(Urban = mean(is.na(irca_urb)),
+            Rural = mean(is.na(irca_rur)),
+            Both = mean(is.na(irca_urb) & is.na(irca_rur)),
+            .groups = "drop") |>
+  pivot_longer(-year, names_to = "component", values_to = "share") |>
+  mutate(component = factor(component, levels = c("Rural", "Urban", "Both")))
+urban_peak <- nd_year |> filter(component == "Urban") |> slice_max(share, n = 1)
+rural_first <- nd_year |>
+  filter(component == "Rural", year == year_min) |>
+  pull(share)
+rural_pat <- muni |>
+  group_by(mpio_code) |>
+  summarise(p = mean(is.na(irca_rur)), .groups = "drop")
+n_rural_always <- sum(rural_pat$p == 1)
+n_rural_never <- sum(rural_pat$p == 0)
+n_rural_inter <- sum(rural_pat$p > 0 & rural_pat$p < 1)
+rn <- muni |>
+  filter(is.na(irca_rur), !is.na(irca_urb)) |>
+  mutate(d = abs(irca - irca_urb))
+pct_total_eq_urban <- mean(rn$d < 0.051)
+n_total_ne_urban <- sum(rn$d > 1)
+```
 
-The rural share fell from about three quarters of rows in `r year_min` to around 40% by 2010 and drifted back to roughly 55% from 2016 onwards. The urban share is usually below 10% but spikes in 2016 and 2017, peaking at `r percent(urban_peak$urban, accuracy = 1)` in `r urban_peak$year`; the spike affects both components at once and looks like a reporting artefact. The rural gap is intermittent rather than structural: only `r n_rural_always` municipalities never report a rural IRCA and only `r n_rural_never` always do. Finally, `ND` does not reliably mean "not sampled". Where the rural IRCA is `ND` and the urban IRCA is present, the overall IRCA equals the urban IRCA in `r percent(pct_total_eq_urban, accuracy = 1)` of cases, but in `r n_total_ne_urban` rows the two differ by more than one point, so rural samples entered the overall index even though the rural component is reported as unavailable.
+No cell is empty (`r n_empty` empty cells), and the overall IRCA and its
+band are never missing (`r n_irca_nd` rows). Missingness lives entirely in
+the urban and rural components, encoded by `ND`, always for the value and
+its band together. In the municipal rows the rural index is missing in
+`r fmt_pct(pct_rural_nd)` of rows and the urban index in
+`r fmt_pct(pct_urban_nd)`; only `r fmt_pct(pct_all_three)` of rows carry all
+three indices, and `r fmt_n(n_both_nd)` rows carry an overall index with
+neither component. Department aggregates are better filled: the rural index
+is missing in `r fmt_pct(pct_dept_rural_nd)` of them. Every reported band
+agrees with the band implied by its value
+(`r label_agreement$n_disagree` disagreements in
+`r fmt_n(label_agreement$n)` values).
+
+The rural gap has changed over time (@fig-nd-year). It affected
+`r fmt_pct(rural_first)` of rows in `r year_min`, fell to around 40% by
+2010, and has stayed above half since 2016. The urban index is rarely
+missing except in 2016 and 2017, peaking at `r fmt_pct(urban_peak$share)` in
+`r urban_peak$year`, when both components go missing together, which
+suggests a reporting artefact rather than a change in sampling. The rural
+gap is intermittent rather than structural: `r n_rural_always`
+municipalities never report a rural index, `r n_rural_never` always do, and
+`r fmt_n(n_rural_inter)` alternate.
+
+Two things distinguish `ND` from a missing unit. Definitionally, a row with
+`ND` still carries an overall index, whereas an absent municipality-year
+carries nothing. Empirically, `ND` does not always mean that no rural
+samples were taken: among the `r fmt_n(nrow(rn))` rows with a rural `ND` and
+an urban value, the overall index equals the urban index in
+`r fmt_pct(pct_total_eq_urban)` of cases, but in `r n_total_ne_urban` rows
+the two differ by more than one point, so rural samples entered the overall
+index even though the rural component is reported as unavailable.
+
+```{r}
+#| label: fig-nd-year
+#| fig-cap: >-
+#|   Share of municipal rows in which the urban index, the rural index, or
+#|   both are reported as ND, by year.
+#| fig-width: 6.5
+#| fig-height: 2.4
+nd_cols <- c(Rural = col_rural, Urban = col_urban, Both = col_both)
+nd_lines <- c(Rural = "solid", Urban = "solid", Both = "22")
+ggplot(nd_year, aes(year, share, colour = component, linetype = component)) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 1.4) +
+  scale_colour_manual(values = nd_cols, name = NULL) +
+  scale_linetype_manual(values = nd_lines, name = NULL) +
+  scale_x_continuous(breaks = years, expand = c(0.02, 0)) +
+  scale_y_continuous(labels = percent_format(accuracy = 1),
+                     limits = c(0, 0.8), expand = c(0, 0)) +
+  labs(x = NULL, y = "Share of rows with ND") +
+  theme(legend.position = "bottom", legend.margin = margin(0, 0, 0, 0),
+        axis.text.x = element_text(size = 6.5))
+```
 
 ## Missing observational units
 
-The `r format(n_muni_codes, big.mark = ",")` municipality codes and `r n_years` years define `r format(grid_size, big.mark = ",")` municipality-years, of which `r format(n_missing_my, big.mark = ",")` (`r percent(pct_missing_my, accuracy = 0.1)`) are absent, so the panel is unbalanced. Coverage improved until `r best_year$year`, when only `r best_year$missing` municipalities were absent, and has weakened since 2020; `r worst_year$year` is the least complete year, with `r worst_year$missing` absent. The gaps are very unevenly distributed (@fig-heatmap). Only `r n_dept_complete` departments are complete over the whole period. Chocó is missing `r percent(choco$share, accuracy = 1)` of its municipality-years and has no rows of any kind before 2014; of the `r n_five_or_fewer` municipalities observed in five or fewer years, `r n_five_choco` are in Chocó. Guainía, Vaupés, Guaviare, Amazonas, Vichada and Córdoba also show substantial gaps. Department-level aggregates are absent in `r n_missing_dy` of `r dept_grid_size` department-years, always exactly when the department reported no municipality at all (`r n_dept_muni_inconsistent` exceptions). Joining the file to the DANE 2020 boundary register (`r format(n_map_units, big.mark = ",")` units) shows that every code in the file exists in the register, and that `r n_never_muni` municipalities never appear in any year (`r paste(paste(never_muni_by_dept$n, "in", never_muni_by_dept$dept_name), collapse = ", ")`), together with the `r n_never_anm` non-municipalised areas of Amazonas, Guainía and Vaupés.
+```{r}
+#| include: false
+frames_tbl <- tibble(
+  Units = c("Municipality-years, internal frame",
+            "Municipality-years, external frame",
+            "Municipalities, external frame",
+            "Department-years"),
+  expected = c(nrow(frame_internal), nrow(frame_external),
+               n_register_muni, n_dept_codes * n_years),
+  observed = c(sum(frame_internal$observed), sum(frame_external$observed),
+               n_muni_codes, nrow(dept))
+) |>
+  mutate(missing = expected - observed, share = missing / expected)
+stopifnot(all(frames_tbl$expected == frames_tbl$observed + frames_tbl$missing))
+pct_missing_int <- frames_tbl$share[1]
+pct_missing_ext <- frames_tbl$share[2]
+n_missing_ext <- frames_tbl$missing[2]
+n_missing_dy <- frames_tbl$missing[4]
+best_year <- by_year_ext |> slice_min(missing, n = 1, with_ties = FALSE)
+worst_year <- by_year_ext |> slice_max(missing, n = 1, with_ties = FALSE)
+by_dept_ext <- frame_external |>
+  group_by(dept_code) |>
+  summarise(n_m = n_distinct(mpio_code), missing = sum(!observed),
+            share = mean(!observed), .groups = "drop") |>
+  left_join(dept_short, by = "dept_code") |>
+  arrange(desc(share))
+n_dept_complete <- sum(by_dept_ext$missing == 0)
+choco <- filter(by_dept_ext, dept_code == "27")
+choco_first <- min(wq$year[wq$dept_code == "27"])
+never_tbl <- register_muni |>
+  filter(!mpio_code %in% muni$mpio_code) |>
+  left_join(dept_short, by = "dept_code") |>
+  arrange(dept_label, mpio_name)
+never_txt <- never_tbl |>
+  group_by(dept_label) |>
+  summarise(txt = paste0(dept_label[1], ": ",
+                         paste(mpio_name, collapse = ", ")),
+            .groups = "drop") |>
+  pull(txt) |>
+  paste(collapse = "; ")
+n_never <- nrow(never_tbl)
+my_dy <- distinct(muni, dept_code, year)
+dy <- distinct(dept, dept_code, year)
+n_dept_inconsistent <-
+  nrow(anti_join(my_dy, dy, by = c("dept_code", "year"))) +
+  nrow(anti_join(dy, my_dy, by = c("dept_code", "year")))
+```
+
+@tbl-frames counts the units that are expected and observed under each
+frame. Against the file's own frame, `r fmt_pct(pct_missing_int, 0.1)` of
+municipality-years are absent; against the national register,
+`r fmt_pct(pct_missing_ext, 0.1)`, because `r n_never` municipalities never
+appear at all (`r never_txt`). Coverage improved from `r year_min` to
+`r best_year$year`, when only `r best_year$missing` municipalities were
+absent, and has weakened since 2020; `r worst_year$year` is the least
+complete year, with `r worst_year$missing` absent. Department aggregates are
+absent in `r n_missing_dy` department-years, exactly those in which the
+department reported no municipality at all (`r n_dept_inconsistent`
+exceptions), so the aggregate rows add no coverage of their own.
+
+```{r}
+#| label: tbl-frames
+#| tbl-cap: >-
+#|   Expected and observed units under the internal frame (codes present at
+#|   least once by years present at least once) and the external frame (DANE
+#|   2020 municipal register, non-municipalised areas excluded).
+frames_tbl |>
+  transmute(Units, Expected = fmt_n(expected), Observed = fmt_n(observed),
+            Missing = fmt_n(missing), `Share missing` = fmt_pct(share, 0.1)) |>
+  kable(align = "lrrrr")
+```
+
+The gaps are concentrated (@fig-heatmap). Only `r n_dept_complete`
+departments are complete over the whole period. Chocó has no rows of any
+kind before `r choco_first` and is missing `r fmt_pct(choco$share)` of its
+municipality-years, `r fmt_n(choco$missing)` of the `r fmt_n(n_missing_ext)`
+absent nationally; Guainía, Vaupés, Guaviare, Córdoba and Amazonas each lack
+more than a fifth.
 
 ```{r}
 #| label: fig-heatmap
-#| fig-cap: "Share of each department's municipalities absent from the file in each year, departments ordered by overall share missing."
+#| fig-cap: >-
+#|   Share of each department's municipalities absent from the file in each
+#|   year, on the external frame. Departments are ordered by their overall
+#|   share missing; the number of municipalities in the register follows each
+#|   name.
+#| fig-width: 6.5
 #| fig-height: 3.6
-dept_order <- missing_by_dept |> arrange(share) |> pull(Departamento)
-ggplot(dept_year_grid,
-       aes(x = year, y = factor(Departamento, levels = dept_order), fill = share_missing)) +
-  geom_tile(colour = "white", linewidth = 0.3) +
-  scale_fill_gradient(low = "#EEF2F8", high = "#1F3F7A", limits = c(0, 1),
-                      labels = percent_format(accuracy = 1), name = "Missing") +
+dept_year_ext <- frame_external |>
+  group_by(dept_code, year) |>
+  summarise(share_missing = mean(!observed), .groups = "drop") |>
+  left_join(by_dept_ext |> select(dept_code, dept_label, n_m, share),
+            by = "dept_code") |>
+  mutate(lab = paste0(dept_label, " (", n_m, ")"))
+lab_order <- dept_year_ext |>
+  distinct(lab, share) |>
+  arrange(share) |>
+  pull(lab)
+ggplot(dept_year_ext,
+       aes(year, factor(lab, levels = lab_order), fill = share_missing)) +
+  geom_tile(colour = "white", linewidth = 0.4) +
+  scale_fill_gradient(low = "#f4f3ef", high = blue_ramp[5], limits = c(0, 1),
+                      labels = percent_format(accuracy = 1), name = "Absent") +
   scale_x_continuous(breaks = years, expand = c(0, 0)) +
   labs(x = NULL, y = NULL) +
-  theme_minimal(base_size = 7) +
-  theme(panel.grid = element_blank(), legend.position = "right",
-        legend.key.height = unit(0.45, "cm"),
-        axis.text.x = element_text(angle = 45, hjust = 1))
+  theme(panel.grid = element_blank(),
+        axis.text.y = element_text(size = 6),
+        axis.text.x = element_text(size = 6, angle = 45, hjust = 1),
+        legend.key.height = unit(0.5, "cm"),
+        legend.key.width = unit(0.25, "cm"))
 ```
 
-## Missing years
+## Missing years and panel balance
 
-At the national level there are no missing years: every calendar year from `r year_min` to `r year_max` is present (`r n_calendar_gaps` gaps). The file was downloaded in September 2026, so the absence of 2025 most likely reflects publication lag. At the municipal level, `r format(n_full, big.mark = ",")` municipalities (`r percent(n_full / n_muni_codes, accuracy = 1)`) are observed in all `r n_years` years. Of the rest, `r n_late` start after `r year_min`, `r n_early` end before `r year_max`, and `r n_with_gaps` have at least one interruption inside their series, accounting for `r n_gap_years` missing municipality-years.
+```{r}
+#| include: false
+n_calendar_gaps <- length(setdiff(seq(year_min, year_max), years))
+series <- frame_internal |>
+  group_by(mpio_code) |>
+  summarise(n = sum(observed), first = min(year[observed]),
+            last = max(year[observed]), .groups = "drop") |>
+  mutate(interior = (last - first + 1) - n,
+         late = first > year_min,
+         early = last < year_max,
+         gaps = interior > 0,
+         pattern = case_when(
+           n == n_years ~ "Complete series",
+           late & !early & !gaps ~ "Starts late only",
+           !late & early & !gaps ~ "Ends early only",
+           !late & !early & gaps ~ "Interior gaps only",
+           TRUE ~ "Two or more of the above"))
+pattern_levels <- c("Complete series", "Starts late only", "Ends early only",
+                    "Interior gaps only", "Two or more of the above")
+series_tbl <- series |>
+  mutate(pattern = factor(pattern, levels = pattern_levels)) |>
+  group_by(pattern, .drop = FALSE) |>
+  summarise(n_muni = n(), missing = sum(n_years - n), .groups = "drop") |>
+  mutate(share = n_muni / sum(n_muni))
+stopifnot(sum(series_tbl$n_muni) == n_muni_codes,
+          sum(series_tbl$missing) == sum(!frame_internal$observed))
+n_full <- series_tbl$n_muni[1]
+pct_full <- series_tbl$share[1]
+n_late <- sum(series$late)
+n_early <- sum(series$early)
+n_gaps <- sum(series$gaps)
+n_gap_years <- sum(series$interior)
+balanced <- sapply(c(2010, 2015, 2019), function(s) {
+  frame_external |>
+    filter(year >= s) |>
+    group_by(mpio_code) |>
+    summarise(all = all(observed), .groups = "drop") |>
+    pull(all) |>
+    sum()
+})
+```
 
-## Answer
+At the national level no year is missing: every calendar year from
+`r year_min` to `r year_max` is present (`r n_calendar_gaps` gaps). The file
+was downloaded in September 2026, so the absence of 2025 most likely
+reflects publication lag rather than a gap. At the municipal level the
+picture is different (@tbl-series). `r fmt_n(n_full)` municipalities
+(`r fmt_pct(pct_full)`) are observed in every year. Of the rest, `r n_late`
+enter after `r year_min`, `r n_early` drop out before `r year_max`, and
+`r n_gaps` have at least one interruption inside their series, which
+together account for `r fmt_n(n_gap_years)` interior gap-years. For anyone
+who needs a balanced panel, shortening the window helps only moderately:
+`r fmt_n(balanced[1])` of the `r fmt_n(n_register_muni)` register
+municipalities are observed in every year from 2010, `r fmt_n(balanced[2])`
+from 2015 and `r fmt_n(balanced[3])` from 2019.
 
-The data are complete in the overall IRCA and in calendar coverage. They are incomplete in the urban and rural components, which are missing in a large and time-varying share of rows, and as a panel of municipalities, with about 6% of municipality-years absent, most of them in Chocó and the Amazon and Orinoco departments, and a quarter of municipalities with interrupted series. Analyses that use the components, compare departments or follow individual municipalities over time must account for this missingness explicitly; analyses of the overall index at the national level can proceed with fewer reservations.
+```{r}
+#| label: tbl-series
+#| tbl-cap: >-
+#|   Continuity of each municipality's series on the internal frame. A
+#|   series starts late if its first year is after 2007, ends early if its
+#|   last year is before 2024, and has interior gaps if years are missing
+#|   between its first and last.
+series_tbl |>
+  transmute(Pattern = as.character(pattern), Municipalities = fmt_n(n_muni),
+            Share = fmt_pct(share),
+            `Missing municipality-years` = fmt_n(missing)) |>
+  kable(align = "lrrr")
+```
+
+## What is complete and what is not
+
+The overall index is complete: it is present in every row, and every
+calendar year from 2007 to 2024 is in the file. The components are not. The
+rural index is unavailable in about half of the municipal rows, and `ND`
+sometimes hides rural samples that did enter the overall index. The panel is
+not complete either. About 6% of the municipality-years implied by the
+national register are absent, `r n_never` municipalities never appear, the
+shortfall is concentrated in Chocó and the Amazon and Orinoco departments,
+and a third of municipalities have a series that starts late, ends early or
+is interrupted. Analyses of the overall index at the national level can
+therefore proceed with few reservations, whereas analyses of the urban or
+rural components, comparisons across departments and municipal time series
+must treat the missingness explicitly.
+
+```{r}
+#| label: check-abstract
+#| include: false
+# The abstract states rounded figures in words; make sure they still hold.
+stopifnot(
+  abs(pct_rural_nd - 0.5) < 0.05,          # "about half"
+  abs(pct_missing_ext - 0.06) < 0.01,      # "about 6%"
+  abs(pct_full - 2 / 3) < 0.04,            # "two thirds"
+  choco$share > 0.8,                       # "more than four fifths"
+  n_irca_nd == 0, n_calendar_gaps == 0
+)
+```
+
+# References {.unnumbered}
+
+::: {#refs}
+:::
