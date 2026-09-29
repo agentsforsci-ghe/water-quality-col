@@ -296,7 +296,9 @@ bb <- st_bbox(filter(map_web, dept_code != "88"))
 
 leaflet(map_web, width = "100%", height = 600,
         options = leafletOptions(minZoom = 4, maxZoom = 11)) |>
-  addProviderTiles(providers$CartoDB.Positron) |>
+  # CARTO basemaps need an API key since 2026; Esri's light grey canvas is
+  # the closest key-free equivalent.
+  addProviderTiles(providers$Esri.WorldGrayCanvas) |>
   addPolygons(fillColor = ~risk_pal(risk), fillOpacity = 0.9,
               color = "white", weight = 0.3, opacity = 1,
               label = ~lapply(tip, HTML),

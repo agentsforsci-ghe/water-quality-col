@@ -77,9 +77,10 @@ the file order. Backtick spans in "Note on import" become `<code>` with
 - Tooltip: name, department, and "IRCA 2019: value (band)"; blanks show
   "No record for 2019"; the 19 non-municipalised areas show "Non-municipalised
   area (not expected)".
-- `colorFactor` over the existing blue ramp plus the two greys, CartoDB Positron
-  basemap, department outlines, legend titled "IRCA 2019", initial view fitted
-  to mainland Colombia, height 600 px.
+- `colorFactor` over the existing blue ramp plus the two greys, Esri light grey
+  canvas basemap (CARTO tiles need an API key; Esri's and OpenStreetMap's do
+  not), department outlines, legend titled "IRCA 2019", initial view fitted to
+  mainland Colombia, height 600 px.
 - `stopifnot(map_year == 2019L)` guards the captions.
 
 ### Render
