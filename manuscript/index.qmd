@@ -93,11 +93,9 @@ render time). @tbl-columns describes the columns and what was done to each
 on import.
 
 ```{r}
-#| label: tbl-columns
-#| tbl-cap: >-
-#|   Columns of the data file, their role, and how each was treated on
-#|   import.
-tibble::tribble(
+#| label: columns-data
+#| include: false
+cols_df <- tibble::tribble(
   ~Column, ~Role, ~`Cleaned type`, ~`Note on import`,
   "DepartamentoCodigo", "Identifier", "Character key",
   "Two-digit DANE code, leading zero kept",
@@ -121,8 +119,41 @@ tibble::tribble(
   "Rural area; `ND` read as missing",
   "Nivel de riesgo rural", "Measurement", "5-level factor",
   "Missing when the value is `ND`"
-) |> kable()
+)
 ```
+
+:::: {.content-visible unless-format="html"}
+::: {#tbl-columns}
+```{r}
+#| label: columns-kable
+#| eval: !expr isFALSE(knitr::is_html_output())
+kable(cols_df)
+```
+Columns of the data file, their role, and how each was treated on import.
+:::
+::::
+
+:::: {.content-visible when-format="html"}
+::: {#tbl-columns}
+```{r}
+#| label: columns-reactable
+#| eval: !expr knitr::is_html_output()
+library(reactable)
+code_html <- function(x) gsub("`([^`]+)`", "<code>\\1</code>", x)
+reactable(
+  cols_df |> mutate(`Note on import` = code_html(`Note on import`)),
+  sortable = TRUE, searchable = FALSE, pagination = FALSE, compact = TRUE,
+  highlight = TRUE, width = "100%",
+  columns = list(
+    Column = colDef(minWidth = 150, style = list(fontFamily = "monospace")),
+    Role = colDef(minWidth = 90),
+    `Cleaned type` = colDef(minWidth = 110),
+    `Note on import` = colDef(minWidth = 260, html = TRUE)))
+```
+Columns of the data file, their role, and how each was treated on import.
+Click a header to sort.
+:::
+::::
 
 Completeness needs a reference set of units that ought to be present. Two
 are used. The *internal* frame is every municipality code that appears at
@@ -170,18 +201,15 @@ map_sf <- mpio_sf |>
                                         "Not expected")),
          n_obs = if_else(anm, NA_integer_, n_obs))
 never_sf <- filter(map_sf, !anm, n_obs == 0)
-
-map_cap <- paste0(
-  "Annual IRCA by municipality in ", map_year, " (left) and number of ",
-  "years, out of ", n_years, ", in which each municipality appears in the ",
-  "file (right). Municipalities that never appear are outlined in orange; ",
-  "non-municipalised areas are not expected. Boundaries: DANE 2020."
-)
+# The captions and the issue that requested the map name 2019 explicitly.
+stopifnot(map_year == 2019L)
 ```
 
+:::: {.content-visible unless-format="html"}
+::: {#fig-map}
 ```{r}
-#| label: fig-map
-#| fig-cap: !expr map_cap
+#| label: map-static
+#| eval: !expr isFALSE(knitr::is_html_output())
 #| fig-width: 6.5
 #| fig-height: 4.6
 base_map <- function() {
@@ -220,6 +248,75 @@ p_obs <- ggplot() +
   base_map()
 p_irca + p_obs
 ```
+Annual IRCA by municipality in `r map_year` (left) and number of years, out
+of `r n_years`, in which each municipality appears in the file (right).
+Municipalities that never appear are outlined in orange; non-municipalised
+areas are not expected. Boundaries: DANE 2020.
+:::
+::::
+
+:::: {.content-visible when-format="html"}
+::: {#fig-map}
+```{r}
+#| label: map-html
+#| eval: !expr knitr::is_html_output()
+library(leaflet)
+library(htmltools)
+# The web copy of the boundaries is simplified and rounded so the embedded
+# page stays small; the DOCX map keeps the full geometry.
+slim <- function(x, tol = 500) {
+  g <- st_geometry(x) |>
+    st_transform(3116) |>
+    st_simplify(dTolerance = tol, preserveTopology = TRUE) |>
+    st_transform(4326) |>
+    st_cast("MULTIPOLYGON")
+  g <- st_as_sfc(st_as_binary(st_set_precision(g, 1e5)), crs = 4326)
+  st_set_geometry(x, g)
+}
+map_web <- slim(map_sf) |> left_join(dept_short, by = "dept_code")
+dept_web <- slim(dept_sf) |> st_cast("MULTILINESTRING")
+stopifnot(nrow(map_web) == nrow(map_sf), !any(st_is_empty(map_web)),
+          all(st_is_valid(map_web)))
+
+map_web <- map_web |>
+  mutate(tip = case_when(
+    anm ~ sprintf("<b>%s</b><br/>%s<br/>Non-municipalised area (not expected)",
+                  htmlEscape(mpio_name), htmlEscape(dept_label)),
+    is.na(irca) ~ sprintf("<b>%s</b><br/>%s<br/>No record for %d",
+                          htmlEscape(mpio_name), htmlEscape(dept_label),
+                          map_year),
+    TRUE ~ sprintf("<b>%s</b><br/>%s<br/>IRCA %d: %s (%s)",
+                   htmlEscape(mpio_name), htmlEscape(dept_label), map_year,
+                   formatC(irca, format = "f", digits = 1),
+                   as.character(risk))))
+
+risk_pal <- colorFactor(c(blue_ramp, grey_none, grey_na),
+                        levels = levels(map_web$risk))
+bb <- st_bbox(filter(map_web, dept_code != "88"))
+
+leaflet(map_web, width = "100%", height = 600,
+        options = leafletOptions(minZoom = 4, maxZoom = 11)) |>
+  addProviderTiles(providers$CartoDB.Positron) |>
+  addPolygons(fillColor = ~risk_pal(risk), fillOpacity = 0.9,
+              color = "white", weight = 0.3, opacity = 1,
+              label = ~lapply(tip, HTML),
+              labelOptions = labelOptions(textsize = "12px"),
+              highlightOptions = highlightOptions(weight = 1.5,
+                                                  color = "#52514e",
+                                                  bringToFront = TRUE)) |>
+  addPolylines(data = dept_web, color = "#52514e", weight = 0.8,
+               opacity = 1) |>
+  addLegend("bottomright", pal = risk_pal, values = ~risk,
+            title = paste("IRCA", map_year), opacity = 0.9) |>
+  fitBounds(bb[["xmin"]], bb[["ymin"]], bb[["xmax"]], bb[["ymax"]])
+```
+Annual IRCA by municipality in `r map_year`, the year with the most
+municipalities reported, classed into the risk bands of Resolution 2115.
+Hover over a municipality for its name, department and index.
+Non-municipalised areas are not expected in the file. Boundaries: DANE 2020,
+simplified.
+:::
+::::
 
 {{< pagebreak >}}
 
