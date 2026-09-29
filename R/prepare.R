@@ -67,7 +67,8 @@ raw <- read_csv(
 
 check("column names as documented", identical(names(raw), expected_cols))
 check("file has 19,160 rows and 11 columns", nrow(raw) == 19160L && ncol(raw) == 11L)
-check("no empty cells", !anyNA(raw) && !any(vapply(raw, function(x) any(trimws(x) == ""), logical(1))))
+n_empty <- sum(vapply(raw, function(x) sum(is.na(x) | trimws(x) == ""), integer(1)))
+check("no empty cells", n_empty == 0L)
 
 # 2. Year ----------------------------------------------------------------------
 
