@@ -10,7 +10,7 @@ format:
     toc: false
     notebook-links: false
     number-sections: true
-    fig-width: 7
+    fig-width: 6.5
     fig-height: 4
     fig-dpi: 300
 
