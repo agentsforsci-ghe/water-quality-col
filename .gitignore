@@ -2,5 +2,7 @@
 .Rhistory
 .RData
 .Ruserdata
-manuscript/.quarto/
-manuscript/index_files/
+manuscripts/*/.quarto/
+manuscripts/*/index_files/
+.DS_Store
+~$*.docx

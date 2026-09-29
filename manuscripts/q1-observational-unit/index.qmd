@@ -19,7 +19,7 @@ library(knitr)
 library(ggplot2)
 
 raw <- read_csv(
-  "../data/Calidad_del_Agua_para_Consumo_Humano_en_Colombia_20260915.csv",
+  "../../data/Calidad_del_Agua_para_Consumo_Humano_en_Colombia_20260915.csv",
   col_types = cols(.default = col_character())
 )
 
